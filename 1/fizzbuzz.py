@@ -29,6 +29,20 @@ def main():
     # which have been printed, starting with zero. (newline) 
     
     # your code goes here.
+    
+
+    total = 0
+    for i in range(start, end+1):
+        if i%15 == 0:
+            print("FizzBuzz")
+        elif i%5 == 0:
+            print("Buzz")
+        elif i%3 == 0:
+            print("Fizz")
+        else:
+            print(total)
+            total+=i
+
             
 # create a main function in Python
 if __name__ == "__main__":
