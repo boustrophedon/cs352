@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 
 # This is the skeleton code of a cs 352 socket
 # You must change the code in the pass statements to make the client and server work. 
@@ -7,20 +8,20 @@ import socket as ip
 class socket:
     
     def __init__(self):
-        pass
-    
+        self.sock = ip.socket(ip.AF_INET, ip.SOCK_DGRAM)
+
     def socket():
         pass
     
     def bind(self,address):
-        pass 
-    
+        self.sock.bind(address)
+
     def sendto(self,buffer,address):
-        pass 
+        self.sock.sendto(buffer, address)
 
     def recvfrom(self,nbytes):
-        pass
+        return self.sock.recvfrom(nbytes)
 
     def close(self):
-        pass
+        self.sock.close()
 
