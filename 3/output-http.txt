@@ -1,6 +1,6 @@
 CS 352 Wireshark, part 1
 Total number of packets, 43
-Source IP addresse, count
+Source IP address, count
 145.254.160.237,20
 65.208.228.223,18
 216.239.59.99,4
