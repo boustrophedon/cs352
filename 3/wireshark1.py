@@ -19,34 +19,41 @@ from collections import OrderedDict
 # this helper method will turn an IP address into a string
 def inet_to_str(inet):
     # First try ipv4 and then ipv6
+    # wow this is shitty, is there really not a better way to do it?
     try:
         return socket.inet_ntop(socket.AF_INET, inet)
     except ValueError:
         return socket.inet_ntop(socket.AF_INET6, inet)
 
-# main code 
-def main():
-    number_of_packets = 0             # you can use these structures if you wish 
+def parse_packets(filename):
+    number_of_packets = 0 
     list_of_ips = dict()
     list_of_tcp_ports = dict()
     list_of_ip_tcp_ports = dict()
 
+    input_data=dpkt.pcap.Reader(open(filename,'r'))
+
+
+    for timestamp, packet in input_data:
+        pass 
+
+    output = list() # string buffer
+    output.append("CS 352 Wireshark, part 1")
+    output.append("Total number of packets, {}".format(number_of_packets))
+    return '\n'.join(output)
+
+def main():
     # parse all the arguments to the client 
     parser = argparse.ArgumentParser(description='CS 352 Wireshark Assignment 1')
     parser.add_argument('-f','--filename', help='pcap file to input', required=True)
 
-    # get the filename into a local variable
     args = vars(parser.parse_args())
+
     filename = args['filename']
 
-    # open the pcap file for processing 
-    input_data=dpkt.pcap.Reader(open(filename,'r'))
+    report = parse_packets(filename)
 
-    # this main loop reads the packets one at a time from the pcap file
-    for timestamp, packet in input_data:
-        # ... your code goes here ...
-        pass 
+    print(report)
 
-# execute a main function in Python
 if __name__ == "__main__":
-    main()    
+    main()
