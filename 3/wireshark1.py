@@ -13,8 +13,8 @@
 
 import dpkt
 import socket
-import argparse 
-from collections import OrderedDict
+import argparse
+from collections import defaultdict
 
 # this helper method will turn an IP address into a string
 def inet_to_str(inet):
@@ -27,19 +27,42 @@ def inet_to_str(inet):
 
 def parse_packets(filename):
     number_of_packets = 0 
-    list_of_ips = dict()
-    list_of_tcp_ports = dict()
-    list_of_ip_tcp_ports = dict()
+    ips = defaultdict(lambda: 0)
+    dst_ports = defaultdict(lambda: 0)
+    src_dst_pairs = defaultdict(lambda: 0)
 
     input_data=dpkt.pcap.Reader(open(filename,'r'))
 
 
     for timestamp, packet in input_data:
-        pass 
+        number_of_packets+=1
+
+        eth = dpkt.ethernet.Ethernet(packet)
+        if type(eth.data) == dpkt.ip.IP:
+            ip = eth.data
+            src_addr = inet_to_str(ip.src)
+            ips[src_addr] += 1
+            if type(ip.data) == dpkt.tcp.TCP:
+                tcp = ip.data
+                dst_port = tcp.dport
+                dst_ports[dst_port] += 1
+                src_dst_pairs[src_addr + ":" + str(dst_port)] += 1
 
     output = list() # string buffer
     output.append("CS 352 Wireshark, part 1")
-    output.append("Total number of packets, {}".format(number_of_packets))
+    output.append("Total number of packets,{}".format(number_of_packets))
+    output.append("Source IP addresses, count")
+    for k,v in reversed(sorted(ips.iteritems(), key=lambda x: x[1])):
+        output.append("{},{}".format(k,v))
+
+    output.append("Destination TCP ports, count")
+    for k,v in reversed(sorted(dst_ports.iteritems(), key=lambda x: x[1])):
+        output.append("{},{}".format(k,v))
+
+    output.append("Source IPs/Destination TCP ports, count")
+    for k,v in reversed(sorted(src_dst_pairs.iteritems(), key=lambda x: x[1])):
+        output.append("{},{}".format(k,v))
+
     return '\n'.join(output)
 
 def main():
