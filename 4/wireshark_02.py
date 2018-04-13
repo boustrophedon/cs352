@@ -1,27 +1,14 @@
 #!/usr/bin/env python
 
-import dpkt
 import datetime
 import socket
 import argparse
 
-class Probes(object):
-    def __init__(self, w, n):
-        self.w = w
-        self.n = n
-        self.probes = dict()
+from collections import defaultdict, namedtuple
 
-    def add(self, packet, timestamp):
-        pass
+import dpkt
 
-class Scans(object):
-    def __init__(self, w, n):
-        self.w = w
-        self.n = n
-        self.scans = dict()
-
-    def add(self, packet, timestamp):
-        pass
+Packet = namedtuple("Packet", ["timestamp","dport","src"])
 
 # convert IP addresses to printable strings 
 def inet_to_str(inet):
@@ -32,6 +19,91 @@ def inet_to_str(inet):
         return socket.inet_ntop(socket.AF_INET6, inet)
 
 # add your own function/class/method defines here.
+
+def format_packet(packet):
+  return "        Packet: [Timestamp: {}, Port: {}, Source IP: {}]".format(
+      datetime.datetime.utcfromtimestamp(packet.timestamp),
+      packet.dport,
+      packet.src)
+
+def flatmap(lists):
+    output = list()
+    for l in lists:
+        output.extend(l)
+    return output
+
+def scan_matcher(cluster_p, test_p, w):
+    return abs(cluster_p.dport - test_p.dport) <= w
+
+def probe_matcher(cluster_p, test_p, w):
+    return ((cluster_p.dport == test_p.dport) and abs(cluster_p.timestamp - test_p.timestamp) <= w)
+
+def match_clusters(clusters, packet, matcher, w):
+    matches = list()
+    for cluster in clusters:
+        for cluster_p in cluster:
+            if matcher(cluster_p, packet, w):
+                matches.append(cluster)
+                break
+    return matches
+
+def find_clusters(packets, matcher, w, n):
+    clusters = list()
+    for packet in packets:
+        matches = match_clusters(clusters, packet, matcher, w)
+
+        if not matches:
+            clusters.append([packet,])
+        else:
+            for match in matches:
+                clusters.remove(match)
+            joined = flatmap(matches)
+            joined.append(packet)
+            clusters.append(joined)
+
+    output = list()
+    for cluster in clusters:
+        if len(cluster) >= n:
+            output.append(cluster)
+
+    return output
+
+
+def find_probes(tcp, udp, w, n):
+    tcp_clusters = find_clusters(tcp, probe_matcher, w, n)
+    udp_clusters = find_clusters(udp, probe_matcher, w, n)
+
+    return tcp_clusters, udp_clusters
+
+def find_scans(tcp, udp, w, n):
+    tcp_clusters = find_clusters(tcp, scan_matcher, w, n)
+    udp_clusters = find_clusters(udp, scan_matcher, w, n)
+
+    return tcp_clusters, udp_clusters
+
+def parse_pcap(file_name, target_ip, W_p, N_p, W_s, N_s):
+    input_data = dpkt.pcap.Reader(open(file_name,'r'))
+
+    tcp = list()
+    udp = list()
+    for timestamp, packet in input_data:
+        eth = dpkt.ethernet.Ethernet(packet)
+        if type(eth.data) == dpkt.ip.IP:
+            ip = eth.data
+            dst = inet_to_str(ip.dst)
+            src = inet_to_str(ip.src)
+            if dst != target_ip:
+                continue
+
+            if type(ip.data) == dpkt.tcp.TCP:
+                tcp.append(Packet(timestamp, ip.data.dport, src))
+            if type(ip.data) == dpkt.udp.UDP:
+                udp.append(Packet(timestamp, ip.data.dport, src))
+
+    tcp_probes, udp_probes = find_probes(tcp, udp, W_p, N_p)
+    tcp_scans, udp_scans = find_scans(tcp, udp, W_s, N_s)
+
+    return (tcp_probes, udp_probes, tcp_scans, udp_scans)
 
 def main():
     # parse all the arguments to the client
@@ -52,16 +124,35 @@ def main():
     W_s = args['ws']
     N_s = args['ns']
 
-    input_data = dpkt.pcap.Reader(open(file_name,'r'))
 
-    probes = Probes()
-    scans = Scans()
+    tcp_probes, udp_probes, tcp_scans, udp_scans = parse_pcap(file_name, target_ip, W_p, N_p, W_s, N_s)
 
-    for timestamp, packet in input_data:
-        
-        # your code goes here ...
-        probes.add(packet, timestamp)
-        scans.add(packet, timestamp)
+    print("Reports for TCP")
+    print("Found {} probes".format(len(tcp_probes)))
+    for cluster in tcp_probes:
+      print("Probe: [{} packets]".format(len(cluster)))
+      for packet in cluster:
+        print(format_packet(packet))
+
+    print("Found {} scans".format(len(tcp_scans)))
+    for cluster in tcp_scans:
+      print("Probe: [{} packets]".format(len(cluster)))
+      for packet in cluster:
+        print(format_packet(packet))
+
+    print("Reports for UDP")
+    print("Found {} probes".format(len(udp_probes)))
+    for cluster in udp_probes:
+      print("Probe: [{} packets]".format(len(cluster)))
+      for packet in cluster:
+        print(format_packet(packet))
+
+    print("Found {} scans".format(len(udp_scans)))
+    for cluster in udp_scans:
+      print("Probe: [{} packets]".format(len(cluster)))
+      for packet in cluster:
+        print(format_packet(packet))
+
 
 # execute a main function in Python
 if __name__ == "__main__":
