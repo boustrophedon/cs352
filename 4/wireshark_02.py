@@ -127,6 +127,7 @@ def main():
 
     tcp_probes, udp_probes, tcp_scans, udp_scans = parse_pcap(file_name, target_ip, W_p, N_p, W_s, N_s)
 
+    print("CS 352 Wireshark (Part 2)")
     print("Reports for TCP")
     print("Found {} probes".format(len(tcp_probes)))
     for cluster in tcp_probes:
