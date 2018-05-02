@@ -32,6 +32,18 @@ ACK =  0x02    # ACK is valid
 DATA = 0x04    # Data is valid 
 FIN =  0x08    # FIN = remote side called close 
 
+def has_syn(b):
+    return b & SYN
+
+def has_ack(b):
+    return b & ACK
+
+def has_data(b):
+    return b & DATA
+
+def has_fin(b):
+    return b & FIN
+
 # max size of the data payload is 63 KB
 MAX_SIZE = (63*1024)
 
@@ -49,6 +61,7 @@ STATE_CLOSED =   7
 STATE_REMOTE_CLOSED = 8
 
 
+sock352_dbg_level = 5
 # function to print. Higher debug levels are more detail
 # highly recommended 
 def dbg_print(level,string):
@@ -56,50 +69,7 @@ def dbg_print(level,string):
     if (sock352_dbg_level >=  level):
         print string 
     return 
-
-# this is the thread object that re-transmits the packets 
-class sock352Thread (threading.Thread):
-    
-    def __init__(self, threadID, name, delay):
-        threading.Thread.__init__(self)
-        self.threadID = threadID
-        self.name = name
-        self.delay = float(delay)
-        
-    def run(self):
-
-        dbg_print(3,("sock352: timeout thread starting %s delay %.3f " % (self.name,self.delay)) )
-        scan_for_timeouts(self.delay)
-        dbg_print(3,("sock352: timeout thread %s Exiting " % (self.name)))
-        return 
       
-# Example timeout thread function
-# every <delay> seconds it wakes up and re-transmits packets that
-# have been sent, but not received. A received packet with a matching ack
-# is removed from the list of outstanding packets.
-
-def scan_for_timeouts(delay):
-    global list_of_outstanding_packets: 
-
-    time.sleep(delay)
-
-    # there is a global socket list, although only 1 socket is supported for now 
-    while ( True ):
-
-        time.sleep(delay)
-        # example 
-        for packet in list_of_outstanding_packets: 
-
-            current_time = time.time()
-            time_diff = float(current_time) - float(packet.time_sent)
-                
-                dbg_print(5,"sock352: packet timeout diff %.3f %f %f " % (time_diff,current_time,skbuf.time_sent))                
-                if (time_diff > delay):
-                    dbg_print(3,"sock352: packet timeout, retransmitting")
-                    # your transmit code here ... 
-        
-    return 
-
 
 # This class holds the data of a packet gets sent over the channel 
 # 
@@ -111,6 +81,52 @@ class Packet:
         self.ack = 0                # acknowledgement number 
         self.size = 0               # size of the data payload 
         self.data = b''             # data 
+
+    @staticmethod
+    def synsent(seq):
+        pkt = Packet()
+        pkt.cntl = SYN
+        pkt.seq = seq
+        return pkt
+
+    @staticmethod
+    def synrcv(synsent, seq):
+        pkt = Packet()
+        pkt.cntl = SYN | ACK
+        pkt.ack = synsent.seq
+        pkt.seq = seq
+        return pkt
+
+    @staticmethod
+    def ack(pkt):
+        ack = Packet()
+        ack.cntl = ACK
+        ack.seq = 0
+        ack.ack = pkt.seq
+
+        return ack
+
+    @staticmethod
+    def data(buf, seq):
+        pkt = Packet()
+        pkt.cntl = DATA
+        pkt.size = len(buf)
+        pkt.data = buf
+        pkt.seq = seq
+
+        return pkt
+
+    @staticmethod
+    def from_bytes(buf):
+        pkt = Packet()
+        pkt.unpack(buf)
+        return pkt
+
+    def is_synsent(self):
+        return (self.cntl == SYN) and (self.ack == 0)
+
+    def is_synrcv(self, synsent):
+        return (self.cntl == SYN | ACK) and (self.ack == synsent.seq)
 
     # unpack a binary byte array into the Python fields of the packet 
     def unpack(self,bytes):
@@ -162,6 +178,8 @@ class Packet:
             retstr= ("%x%x%x%x%xx%s" % (self.type,self.cntl,self.seq,self.ack,self.size,binascii.hexlify(self.data)))
         return retstr
 
+# A received packet with a matching ack
+# is removed from the list of outstanding packets.
 
 # the main socket class
 # you must fill in all the methods
@@ -175,6 +193,14 @@ class Socket:
         self.debug_level = 0
         self.sock = ip.socket(ip.AF_INET, ip.SOCK_DGRAM)
 
+        self.timeout = 0.1 #TODO check various timeouts against bandwidth test
+
+        self.remote_addr = None
+        self.next_seq_recv = None
+        self.next_seq_send = 9
+
+        self.sent_unacked = list()
+        self.recv_buffered = list()
 
     # Print a debugging statement line
     # 
@@ -205,30 +231,101 @@ class Socket:
     #
     def bind(self,address):
         if self.state != STATE_INIT:
+            raise ip.error("socket is already in use")
+
+        self.sock.bind(address)
+        dbg_print(1, "Bound to address {}".format(address))
 
     # connect to a remote port
     # You must implement this method
     def connect(self,address):
-        # ... your code here ...
-        pass 
+        self.remote_addr = address
 
+        synsent = Packet.synsent(self.next_seq_send)
+        self.next_seq_send+=1
+        self.sock.sendto(synsent.pack(), self.remote_addr)
+
+        dbg_print(1, "synsent sent with seq {}".format(synsent.seq))
+        self.state = STATE_SYNSENT
+        
+        buf, _ = self.sock.recvfrom(MAX_PKT)
+        synrcv = Packet.from_bytes(buf)
+        if not synrcv.is_synrcv(synsent):
+            dbg_print(0, synrcv.toHexFields)
+            raise ip.error("error, packet after synsent was not synrcv")
+        dbg_print(1, "synrcv successfully received, seq {}".format(synrcv.seq))
+
+        dbg_print(1, "sending ack to synrcv")
+        synrcv_ack = Packet.ack(synrcv)
+        self.sock.sendto(synrcv_ack.pack(), self.remote_addr)
+        #self.next_seq_send+=1
+
+        self.state = STATE_ESTABLISHED
+        dbg_print(1, "connection established")
+
+
+        self.sock.settimeout(self.timeout)
 
     #accept a connection
     def accept(self):
-        # ... your code here ...
-        pass 
-    
+        if self.state != STATE_INIT:
+            dbg_print(0, "Socket is already in use.")
+
+        # not really useful since we wait here, i.e. state is never visible
+        self.state = STATE_LISTEN
+
+        buf, addr = self.sock.recvfrom(MAX_PKT)
+        self.remote_addr = addr
+
+        synsent = Packet.from_bytes(buf)
+        if not synsent.is_synsent():
+            dbg_print(0, synsent.toHexFields())
+            raise ip.error("error, first connection packet was not synsent")
+
+        dbg_print(1, "Synsent received, seq {}".format(synsent.seq))
+        synrcv = Packet.synrcv(synsent, self.next_seq_send)
+        self.sock.sendto(synrcv.pack(), self.remote_addr)
+        self.next_seq_recv = synsent.seq+1
+        self.next_seq_send += 1
+
+        # acks don't get dropped so this is guaranteed
+        self.state = STATE_ESTABLISHED
+        dbg_print(1, "connection established")
+
+        self.sock.settimeout(self.timeout)
+        
+
+        # technically we are supposed to return a new socket from this, just return self
+        return (self, self.sock.getsockname())
+
     # send a message up to MAX_DATA
     # You must implement this method     
     def sendto(self,buffer):
-        # ... your code here ...
-        pass 
+        if self.state == STATE_ESTABLISHED:
+            pkt = Packet.data(buffer, self.next_seq_send)
+            self.sent_unacked.append(pkt)
+
+            self.sock.sendto(pkt.pack(), self.remote_addr)
+            self.next_seq_send+=1
+            return len(buffer)
+
+        elif self.state == STATE_CLOSING:
+            pass
+        else: 
+            raise ip.error("Socket not connected. Current state: {}".format(self.state))
+            
 
     # receive a message up to MAX_DATA
     # You must implement this method     
     def recvfrom(self,nbytes):
-        # ... your code here ...
-        pass
+        if self.state == STATE_ESTABLISHED:
+            pass
+        elif self.state == STATE_LISTEN:
+            raise ip.error("Socket not connected.")
+        elif self.state == STATE_CLOSING:
+            pass
+        else: # init, closed, remoteclosed
+            return None
 
     # close the socket and make sure all outstanding
     # data is delivered 
@@ -237,19 +334,3 @@ class Socket:
         # ... your code here ...
         pass
         
-# Example how to start a start the timeout thread
-global sock352_dbg_level 
-sock352_dbg_level = 0
-dbg_print(3,"starting timeout thread")
-
-# create the thread 
-thread1 = sock352Thread(1, "Thread-1", 0.25)
-
-# you must make it a daemon thread so that the thread will
-# exit when the main thread does. 
-thread1.daemon = True
-
-# run the thread 
-thread1.start()
-
-
