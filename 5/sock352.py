@@ -117,6 +117,14 @@ class Packet:
         return pkt
 
     @staticmethod
+    def fin(seq):
+        pkt = Packet()
+        pkt.cntl = FIN
+        pkt.seq = seq
+
+        return pkt
+
+    @staticmethod
     def from_bytes(buf):
         pkt = Packet()
         pkt.unpack(buf)
@@ -133,6 +141,9 @@ class Packet:
 
     def is_data(self):
         return (self.cntl == DATA)
+
+    def is_fin(self):
+        return (self.cntl == FIN)
 
     # unpack a binary byte array into the Python fields of the packet 
     def unpack(self,bytes):
@@ -206,7 +217,7 @@ class Socket:
         self.next_seq_send = 9
 
         # TODO check dict vs list for bandwidth test
-        self.sent_unacked = set()
+        self.sent_unacked = dict()
         self.recv_buffered = dict()
 
     # Print a debugging statement line
@@ -325,18 +336,18 @@ class Socket:
     # receive a message up to MAX_DATA
     # You must implement this method     
     def recvfrom(self,nbytes):
-        if self.state == STATE_ESTABLISHED:
-            while True:
+        while True:
+            if (self.state == STATE_ESTABLISHED) or (self.state == STATE_REMOTE_CLOSED) or (self.state == STATE_CLOSING):
                 data = self.do_recv()
                 if data:
                     return data
+                if self.state == STATE_CLOSED:
+                    return None
 
-        elif self.state == STATE_LISTEN:
-            raise ip.error("Socket not connected.")
-        elif self.state == STATE_CLOSING:
-            pass
-        else: # init, closed, remoteclosed
-            return None
+            elif self.state == STATE_LISTEN:
+                raise ip.error("Socket not connected.")
+            else: # init, closed, remoteclosed
+                return None
 
     def do_recv(self):
         buffered_pkt = self.check_recv_buffered()
@@ -356,18 +367,28 @@ class Socket:
                 dbg_print(1, "received data with seq {}".format(pkt.seq))
                 if pkt.seq == self.next_seq_recv:
                     dbg_print(1, "sequence number matches expected next seq")
-                    self.ack_data(pkt)
+                    self.send_ack(pkt)
                     return pkt.data
+                elif pkt.seq > self.next_seq_recv:
+                    dbg_print(1, "sequence number is greater than expected, storing packet and resending unacked packets")
+                    self.add_recv_buffered(pkt)
+                    self.send_ack(pkt)
+                    self.resend_sent_unacked()
                 else:
-                    dbg_print(1, "sequence number does not match expected: sent {}, expected {}".format(pkt.seq, self.next_seq_recv))
-                    if pkt.seq > self.next_seq_recv:
-                        dbg_print(1, "sequence number is greater thanexpected, storing packet and resending unacked packets")
-                        self.add_recv_buffered(pkt)
-                        self.resend_sent_unacked()
-                    else:
-                        dbg_print(1, "sequence number is less than current expected, discarding")
-                        # if we already received it, ignore
-                        return None
+                    dbg_print(1, "sequence number is less than current expected, discarding")
+                    # if we already received it, ignore
+                    return None
+
+            elif pkt.is_fin():
+                dbg_print(1, "received fin with seq {}".format(pkt.seq))
+                if self.state == STATE_CLOSING:
+                    dbg_print(1, "we are in close() and recieved a FIN, CLOSEing")
+                    self.state = STATE_CLOSED
+                    return None
+                dbg_print(1, "recived fin with seq {}".format(pkt.seq))
+                self.state = STATE_REMOTE_CLOSED
+                self.send_ack(pkt)
+
 
         except ip.timeout:
             dbg_print(2, "timeout exceeded, resending unacked packets")
@@ -379,32 +400,49 @@ class Socket:
     def add_recv_buffered(self, pkt):
         self.recv_buffered[pkt.seq] = pkt
 
-    def ack_data(self, pkt):
+    def send_ack(self, pkt):
         ack = Packet.ack(pkt)
         self.sock.sendto(ack.pack(), self.remote_addr)
         self.next_seq_recv += 1
 
+    def send_fin(self):
+        fin = Packet.fin(self.next_seq_send)
+        self.sock.sendto(fin.pack(), self.remote_addr)
+        self.next_seq_send += 1
+
     def add_sent_unacked(self, pkt):
-        self.sent_unacked.add(pkt.seq)
+        self.sent_unacked[pkt.seq] = pkt
         self.next_seq_send+=1
     
     def check_sent_unacked(self, pkt):
         if pkt.ack in self.sent_unacked:
             dbg_print(1, "received ack for packet with our seq {}".format(pkt.ack))
-            self.sent_unacked.discard(pkt.ack)
+            self.sent_unacked.pop(pkt.ack, None)
         # assuming that we don't get acks for unsent seqs
         else:
             dbg_print(1, "received duplicate ack for packet with our seq {}".format(pkt.ack))
 
     def resend_sent_unacked(self):
-        for pkt in self.sent_unacked:
+        for pkt in self.sent_unacked.values():
             dbg_print(1, "resending unacked packet with seq {}".format(pkt.seq))
             self.sock.sendto(pkt.pack(), self.remote_addr)
+            # do not increase next_seq_send here, since we are already past it
 
     # close the socket and make sure all outstanding
     # data is delivered 
     # You must implement this method         
     def close(self):
-        # ... your code here ...
-        pass
-        
+        dbg_print(1, "closing connection")
+        if self.state == STATE_REMOTE_CLOSED:
+            return
+        self.state = STATE_CLOSING
+
+        fin = Packet.fin(self.next_seq_send)
+        self.send_fin()
+        while len(self.sent_unacked) > 0 and not self.state == STATE_CLOSED:
+            # dbg_print(2, "resending unacked packets, waiting for remote close. state {}".format(self.state))
+            # dbg_print(2, "{} unacked packets".format(len(self.sent_unacked)))
+            # for pkt in self.sent_unacked.values():
+            #     dbg_print(4, "type {:x}, seq {}".format(pkt.cntl, pkt.seq))
+            _ = self.recvfrom(MAX_SIZE)
+        return 
