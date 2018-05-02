@@ -128,6 +128,12 @@ class Packet:
     def is_synrcv(self, synsent):
         return (self.cntl == SYN | ACK) and (self.ack == synsent.seq)
 
+    def is_ack(self):
+        return (self.cntl == ACK)
+
+    def is_data(self):
+        return (self.cntl == DATA)
+
     # unpack a binary byte array into the Python fields of the packet 
     def unpack(self,bytes):
         # check that the data length is at least the size of a packet header 
@@ -193,14 +199,15 @@ class Socket:
         self.debug_level = 0
         self.sock = ip.socket(ip.AF_INET, ip.SOCK_DGRAM)
 
-        self.timeout = 0.1 #TODO check various timeouts against bandwidth test
+        self.timeout = 0.1 # TODO check various timeouts against bandwidth test
 
         self.remote_addr = None
         self.next_seq_recv = None
         self.next_seq_send = 9
 
-        self.sent_unacked = list()
-        self.recv_buffered = list()
+        # TODO check dict vs list for bandwidth test
+        self.sent_unacked = set()
+        self.recv_buffered = dict()
 
     # Print a debugging statement line
     # 
@@ -253,12 +260,13 @@ class Socket:
         if not synrcv.is_synrcv(synsent):
             dbg_print(0, synrcv.toHexFields)
             raise ip.error("error, packet after synsent was not synrcv")
+
         dbg_print(1, "synrcv successfully received, seq {}".format(synrcv.seq))
+        self.next_seq_recv = synrcv.seq+1
 
         dbg_print(1, "sending ack to synrcv")
         synrcv_ack = Packet.ack(synrcv)
         self.sock.sendto(synrcv_ack.pack(), self.remote_addr)
-        #self.next_seq_send+=1
 
         self.state = STATE_ESTABLISHED
         dbg_print(1, "connection established")
@@ -303,10 +311,9 @@ class Socket:
     def sendto(self,buffer):
         if self.state == STATE_ESTABLISHED:
             pkt = Packet.data(buffer, self.next_seq_send)
-            self.sent_unacked.append(pkt)
 
             self.sock.sendto(pkt.pack(), self.remote_addr)
-            self.next_seq_send+=1
+            self.add_sent_unacked(pkt)
             return len(buffer)
 
         elif self.state == STATE_CLOSING:
@@ -319,13 +326,80 @@ class Socket:
     # You must implement this method     
     def recvfrom(self,nbytes):
         if self.state == STATE_ESTABLISHED:
-            pass
+            while True:
+                data = self.do_recv()
+                if data:
+                    return data
+
         elif self.state == STATE_LISTEN:
             raise ip.error("Socket not connected.")
         elif self.state == STATE_CLOSING:
             pass
         else: # init, closed, remoteclosed
             return None
+
+    def do_recv(self):
+        buffered_pkt = self.check_recv_buffered()
+        if buffered_pkt:
+            dbg_print(1, "Buffered packet is available to recv")
+            self.next_seq_recv += 1
+            # no ack, we already acked when it was received
+            return buffered_pkt.data
+        try:
+            buf, addr = self.sock.recvfrom(MAX_PKT)
+            pkt = Packet.from_bytes(buf)
+            if pkt.is_ack():
+                self.check_sent_unacked(pkt)
+                return None
+
+            elif pkt.is_data():
+                dbg_print(1, "received data with seq {}".format(pkt.seq))
+                if pkt.seq == self.next_seq_recv:
+                    dbg_print(1, "sequence number matches expected next seq")
+                    self.ack_data(pkt)
+                    return pkt.data
+                else:
+                    dbg_print(1, "sequence number does not match expected: sent {}, expected {}".format(pkt.seq, self.next_seq_recv))
+                    if pkt.seq > self.next_seq_recv:
+                        dbg_print(1, "sequence number is greater thanexpected, storing packet and resending unacked packets")
+                        self.add_recv_buffered(pkt)
+                        self.resend_sent_unacked()
+                    else:
+                        dbg_print(1, "sequence number is less than current expected, discarding")
+                        # if we already received it, ignore
+                        return None
+
+        except ip.timeout:
+            dbg_print(2, "timeout exceeded, resending unacked packets")
+            self.resend_sent_unacked()
+
+    def check_recv_buffered(self):
+        return self.recv_buffered.get(self.next_seq_recv)
+
+    def add_recv_buffered(self, pkt):
+        self.recv_buffered[pkt.seq] = pkt
+
+    def ack_data(self, pkt):
+        ack = Packet.ack(pkt)
+        self.sock.sendto(ack.pack(), self.remote_addr)
+        self.next_seq_recv += 1
+
+    def add_sent_unacked(self, pkt):
+        self.sent_unacked.add(pkt.seq)
+        self.next_seq_send+=1
+    
+    def check_sent_unacked(self, pkt):
+        if pkt.ack in self.sent_unacked:
+            dbg_print(1, "received ack for packet with our seq {}".format(pkt.ack))
+            self.sent_unacked.discard(pkt.ack)
+        # assuming that we don't get acks for unsent seqs
+        else:
+            dbg_print(1, "received duplicate ack for packet with our seq {}".format(pkt.ack))
+
+    def resend_sent_unacked(self):
+        for pkt in self.sent_unacked:
+            dbg_print(1, "resending unacked packet with seq {}".format(pkt.seq))
+            self.sock.sendto(pkt.pack(), self.remote_addr)
 
     # close the socket and make sure all outstanding
     # data is delivered 
