@@ -158,10 +158,11 @@ class Packet:
             self.ack  = values[3]
             self.size = values[4] 
             self.data = values[5]
-            # you dont have to have to implement the the dbg_print function, but its highly recommended 
-            dbg_print (1,("sock352: unpacked:0x%x cntl:0x%x seq:0x%x ack:0x%x size:0x%x data:x%s" % (self.type,self.cntl,self.seq,self.ack,self.size,binascii.hexlify(self.data))))
+            # you dont have to have to implement the the # dbg_print function, but its highly recommended 
+            # dbg_print (1,("sock352: unpacked:0x%x cntl:0x%x seq:0x%x ack:0x%x size:0x%x data:x%s" % (self.type,self.cntl,self.seq,self.ack,self.size,binascii.hexlify(self.data))))
         else:
-            dbg_print (2,("sock352 error: bytes to packet unpacker are too short len %d %d " % (len(bytes), st.calcsize('!bbLLH'))))
+            # dbg_print (2,("sock352 error: bytes to packet unpacker are too short len %d %d " % (len(bytes), st.calcsize('!bbLLH'))))
+            pass
 
         return
     
@@ -175,7 +176,7 @@ class Packet:
             bytes = st.pack('!bbLLH',self.type,self.cntl,self.seq,self.ack,self.size)
         else:
             new_format = HEADER_FMT + str(data_len) + 's'  # create a new string '!bbLLH30s' 
-            dbg_print(5,("cs352 pack: %d %d %d %d %d %s " % (self.type,self.cntl,self.seq,self.ack,self.size,self.data)))
+            # dbg_print(5,("cs352 pack: %d %d %d %d %d %s " % (self.type,self.cntl,self.seq,self.ack,self.size,self.data)))
             bytes = st.pack(new_format,self.type,self.cntl,self.seq,self.ack,self.size,self.data)
         return bytes
     
@@ -210,7 +211,7 @@ class Socket:
         self.debug_level = 0
         self.sock = ip.socket(ip.AF_INET, ip.SOCK_DGRAM)
 
-        self.timeout = 0.1 # TODO check various timeouts against bandwidth test
+        self.timeout = 0.25 # TODO check various timeouts against bandwidth test
 
         self.remote_addr = None
         self.next_seq_recv = None
@@ -252,7 +253,7 @@ class Socket:
             raise ip.error("socket is already in use")
 
         self.sock.bind(address)
-        dbg_print(1, "Bound to address {}".format(address))
+        # dbg_print(1, "Bound to address {}".format(address))
 
     # connect to a remote port
     # You must implement this method
@@ -263,24 +264,24 @@ class Socket:
         self.next_seq_send+=1
         self.sock.sendto(synsent.pack(), self.remote_addr)
 
-        dbg_print(1, "synsent sent with seq {}".format(synsent.seq))
+        # dbg_print(1, "synsent sent with seq {}".format(synsent.seq))
         self.state = STATE_SYNSENT
         
         buf, _ = self.sock.recvfrom(MAX_PKT)
         synrcv = Packet.from_bytes(buf)
         if not synrcv.is_synrcv(synsent):
-            dbg_print(0, synrcv.toHexFields)
+            # dbg_print(0, synrcv.toHexFields)
             raise ip.error("error, packet after synsent was not synrcv")
 
-        dbg_print(1, "synrcv successfully received, seq {}".format(synrcv.seq))
+        # dbg_print(1, "synrcv successfully received, seq {}".format(synrcv.seq))
         self.next_seq_recv = synrcv.seq+1
 
-        dbg_print(1, "sending ack to synrcv")
+        # dbg_print(1, "sending ack to synrcv")
         synrcv_ack = Packet.ack(synrcv)
         self.sock.sendto(synrcv_ack.pack(), self.remote_addr)
 
         self.state = STATE_ESTABLISHED
-        dbg_print(1, "connection established")
+        # dbg_print(1, "connection established")
 
 
         self.sock.settimeout(self.timeout)
@@ -288,7 +289,8 @@ class Socket:
     #accept a connection
     def accept(self):
         if self.state != STATE_INIT:
-            dbg_print(0, "Socket is already in use.")
+            # dbg_print(0, "Socket is already in use.")
+            pass
 
         # not really useful since we wait here, i.e. state is never visible
         self.state = STATE_LISTEN
@@ -298,10 +300,10 @@ class Socket:
 
         synsent = Packet.from_bytes(buf)
         if not synsent.is_synsent():
-            dbg_print(0, synsent.toHexFields())
+            # dbg_print(0, synsent.toHexFields())
             raise ip.error("error, first connection packet was not synsent")
 
-        dbg_print(1, "Synsent received, seq {}".format(synsent.seq))
+        # dbg_print(1, "Synsent received, seq {}".format(synsent.seq))
         synrcv = Packet.synrcv(synsent, self.next_seq_send)
         self.sock.sendto(synrcv.pack(), self.remote_addr)
         self.next_seq_recv = synsent.seq+1
@@ -309,7 +311,7 @@ class Socket:
 
         # acks don't get dropped so this is guaranteed
         self.state = STATE_ESTABLISHED
-        dbg_print(1, "connection established")
+        # dbg_print(1, "connection established")
 
         self.sock.settimeout(self.timeout)
         
@@ -352,7 +354,7 @@ class Socket:
     def do_recv(self):
         buffered_pkt = self.check_recv_buffered()
         if buffered_pkt:
-            dbg_print(1, "Buffered packet is available to recv")
+            # dbg_print(1, "Buffered packet is available to recv")
             self.next_seq_recv += 1
             # no ack, we already acked when it was received
             return buffered_pkt.data
@@ -364,34 +366,34 @@ class Socket:
                 return None
 
             elif pkt.is_data():
-                dbg_print(1, "received data with seq {}".format(pkt.seq))
+                # dbg_print(1, "received data with seq {}".format(pkt.seq))
                 if pkt.seq == self.next_seq_recv:
-                    dbg_print(1, "sequence number matches expected next seq")
+                    # dbg_print(1, "sequence number matches expected next seq")
                     self.send_ack(pkt)
                     return pkt.data
                 elif pkt.seq > self.next_seq_recv:
-                    dbg_print(1, "sequence number is greater than expected, storing packet and resending unacked packets")
+                    # dbg_print(1, "sequence number is greater than expected, storing packet and resending unacked packets")
                     self.add_recv_buffered(pkt)
                     self.send_ack(pkt)
                     self.resend_sent_unacked()
                 else:
-                    dbg_print(1, "sequence number is less than current expected, discarding")
+                    # dbg_print(1, "sequence number is less than current expected, discarding")
                     # if we already received it, ignore
                     return None
 
             elif pkt.is_fin():
-                dbg_print(1, "received fin with seq {}".format(pkt.seq))
+                # dbg_print(1, "received fin with seq {}".format(pkt.seq))
                 if self.state == STATE_CLOSING:
-                    dbg_print(1, "we are in close() and recieved a FIN, CLOSEing")
+                    # dbg_print(1, "we are in close() and recieved a FIN, CLOSEing")
                     self.state = STATE_CLOSED
                     return None
-                dbg_print(1, "recived fin with seq {}".format(pkt.seq))
+                # dbg_print(1, "recived fin with seq {}".format(pkt.seq))
                 self.state = STATE_REMOTE_CLOSED
                 self.send_ack(pkt)
 
 
         except ip.timeout:
-            dbg_print(2, "timeout exceeded, resending unacked packets")
+            # dbg_print(2, "timeout exceeded, resending unacked packets")
             self.resend_sent_unacked()
 
     def check_recv_buffered(self):
@@ -416,15 +418,16 @@ class Socket:
     
     def check_sent_unacked(self, pkt):
         if pkt.ack in self.sent_unacked:
-            dbg_print(1, "received ack for packet with our seq {}".format(pkt.ack))
+            # dbg_print(1, "received ack for packet with our seq {}".format(pkt.ack))
             self.sent_unacked.pop(pkt.ack, None)
         # assuming that we don't get acks for unsent seqs
         else:
-            dbg_print(1, "received duplicate ack for packet with our seq {}".format(pkt.ack))
+            # dbg_print(1, "received duplicate ack for packet with our seq {}".format(pkt.ack))
+            pass
 
     def resend_sent_unacked(self):
         for pkt in self.sent_unacked.values():
-            dbg_print(1, "resending unacked packet with seq {}".format(pkt.seq))
+            # dbg_print(1, "resending unacked packet with seq {}".format(pkt.seq))
             self.sock.sendto(pkt.pack(), self.remote_addr)
             # do not increase next_seq_send here, since we are already past it
 
@@ -432,7 +435,7 @@ class Socket:
     # data is delivered 
     # You must implement this method         
     def close(self):
-        dbg_print(1, "closing connection")
+        # dbg_print(1, "closing connection")
         if self.state == STATE_REMOTE_CLOSED:
             return
         self.state = STATE_CLOSING
@@ -440,9 +443,9 @@ class Socket:
         fin = Packet.fin(self.next_seq_send)
         self.send_fin()
         while len(self.sent_unacked) > 0 and not self.state == STATE_CLOSED:
-            # dbg_print(2, "resending unacked packets, waiting for remote close. state {}".format(self.state))
-            # dbg_print(2, "{} unacked packets".format(len(self.sent_unacked)))
+            # # dbg_print(2, "resending unacked packets, waiting for remote close. state {}".format(self.state))
+            # # dbg_print(2, "{} unacked packets".format(len(self.sent_unacked)))
             # for pkt in self.sent_unacked.values():
-            #     dbg_print(4, "type {:x}, seq {}".format(pkt.cntl, pkt.seq))
+            #     # dbg_print(4, "type {:x}, seq {}".format(pkt.cntl, pkt.seq))
             _ = self.recvfrom(MAX_SIZE)
         return 
