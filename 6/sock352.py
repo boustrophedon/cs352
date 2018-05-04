@@ -80,7 +80,7 @@ def dbg_print(level,string):
       
 def encrypt_message(buf, nacl_box):
     nonce = nacl.utils.random(Box.NONCE_SIZE)
-    return nacl_box.encrypt(buf)
+    return nacl_box.encrypt(buf, nonce)
 
 def decrypt_message(buf, nacl_box):
     return nacl_box.decrypt(buf)
